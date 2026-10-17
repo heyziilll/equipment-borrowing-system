@@ -422,7 +422,60 @@ function ProfilePage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
+  
+  const [pictureVersion, setPictureVersion] = useState(0);
+  const [pictureBusy, setPictureBusy] = useState(false);
+  const [pictureMessage, setPictureMessage] = useState("");
+  const [pictureError, setPictureError] = useState(false);
   const isBorrower = borrowerRoles.includes(user.role);
+
+  
+  async function uploadProfilePicture(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setPictureBusy(true);
+    setPictureMessage("");
+    setPictureError(false);
+
+    try {
+      const body = new FormData();
+      body.append("image", file);
+      await api.post("/auth/profile-picture", body);
+      setPictureVersion((version) => version + 1);
+      setPictureMessage("Profile picture updated successfully.");
+    } catch (e) {
+      setPictureError(true);
+      setPictureMessage(
+        e.response?.data?.error || "Profile picture upload failed."
+      );
+    } finally {
+      setPictureBusy(false);
+      event.target.value = "";
+    }
+  }
+
+  async function removeProfilePicture() {
+    if (!window.confirm("Remove your profile picture?")) return;
+
+    setPictureBusy(true);
+    setPictureMessage("");
+    setPictureError(false);
+
+    try {
+      await api.delete("/auth/profile-picture");
+      setPictureVersion((version) => version + 1);
+      setPictureMessage("Profile picture removed.");
+    } catch (e) {
+      setPictureError(true);
+      setPictureMessage(
+        e.response?.data?.error || "Could not remove profile picture."
+      );
+    } finally {
+      setPictureBusy(false);
+    }
+  }
+
 
   async function saveProfile(event) {
     event.preventDefault();
@@ -456,8 +509,51 @@ function ProfilePage() {
         <div><h2 className="font-semibold">Personal information</h2><p className="mt-1 text-sm text-slate-500">Update the name and details shown on your account.</p></div>
         <span className="rounded-full bg-blue-50 px-3 py-1.5 text-sm font-semibold capitalize text-blue-800">Role: {user.role}</span>
       </div>
+      
       <Notice message={message} error={error} />
+
+      <div className="mb-6 flex flex-wrap items-center gap-4">
+        <img
+          src={`/api/auth/profile-picture?v=${pictureVersion}`}
+          alt="Profile picture"
+          className="h-24 w-24 rounded-full border border-slate-200 bg-slate-100 object-cover"
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+
+        <div className="space-y-2">
+          <h3 className="font-semibold">Profile picture</h3>
+          <p className="text-sm text-slate-500">
+            Upload a JPEG, PNG, or WebP image.
+          </p>
+
+          <label className="btn-primary inline-flex cursor-pointer items-center">
+            {pictureBusy ? "Please wait..." : "Upload picture"}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              disabled={pictureBusy}
+              onChange={uploadProfilePicture}
+            />
+          </label>
+
+          <button
+            type="button"
+            className="btn-secondary ml-2"
+            disabled={pictureBusy}
+            onClick={removeProfilePicture}
+          >
+            Remove
+          </button>
+
+          <Notice message={pictureMessage} error={pictureError} />
+        </div>
+      </div>
+
       <form className="space-y-4" onSubmit={saveProfile}>
+
         <Field label="Full name" value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} autoComplete="name" required />
         <label className="block text-sm font-medium text-slate-700">Email address<input className="field mt-1.5 bg-slate-50 text-slate-600" value={user.email} readOnly aria-readonly="true" /><span className="mt-1 block text-xs font-normal text-slate-500">To change your email, contact an administrator so verification can be handled.</span></label>
         {isBorrower && <>

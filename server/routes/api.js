@@ -284,6 +284,78 @@ router.get("/auth/me", ...passwordUpdateAllowed, async (req, res) => {
     res.json({ user: { ...rows[0], accountHold: Boolean(rows[0].accountHold), mustChangePassword: Boolean(rows[0].mustChangePassword) } });
 });
 
+router.post(
+    "/auth/profile-picture",
+    ...authRequired,
+    upload.single("image"),
+    async (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                error: "Please select a profile picture."
+            });
+        }
+
+        const mime = detectImageMime(req.file.buffer);
+
+        if (!mime || mime !== req.file.mimetype) {
+            return res.status(400).json({
+                error: "Please upload a valid JPEG, PNG, or WebP image."
+            });
+        }
+
+        await db.execute(
+            `UPDATE users
+             SET profile_picture_mime = ?, profile_picture_data = ?
+             WHERE id = ?`,
+            [mime, req.file.buffer, req.user.id]
+        );
+
+        await audit(req, "profile.picture_updated", "user", req.user.id);
+
+        res.json({ message: "Profile picture updated." });
+    }
+);
+
+router.get(
+    "/auth/profile-picture",
+    ...authRequired,
+    async (req, res) => {
+        const [rows] = await db.execute(
+            `SELECT profile_picture_mime, profile_picture_data
+             FROM users WHERE id = ?`,
+            [req.user.id]
+        );
+
+        const user = rows[0];
+
+        if (!user || !user.profile_picture_data) {
+            return res.status(404).end();
+        }
+
+        res.set("X-Content-Type-Options", "nosniff");
+        res.set("Cache-Control", "private, no-store");
+        res.type(user.profile_picture_mime).send(user.profile_picture_data);
+    }
+);
+
+router.delete(
+    "/auth/profile-picture",
+    ...authRequired,
+    async (req, res) => {
+        await db.execute(
+            `UPDATE users
+             SET profile_picture_mime = NULL,
+                 profile_picture_data = NULL
+             WHERE id = ?`,
+            [req.user.id]
+        );
+
+        await audit(req, "profile.picture_removed", "user", req.user.id);
+
+        res.json({ message: "Profile picture removed." });
+    }
+);
+
 router.patch("/auth/profile", ...authRequired, async (req, res) => {
     const input = parse(z.object({
         fullName: z.string().trim().min(2).max(160),
