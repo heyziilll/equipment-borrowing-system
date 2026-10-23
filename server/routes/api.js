@@ -550,6 +550,40 @@ router.get("/notifications", ...authRequired, async (req, res) => {
     res.json({ notifications: rows });
 });
 
+router.get("/notifications/unread-count", ...authRequired, async (req, res) => {
+    const [rows] = await db.execute(
+        `SELECT COUNT(*) AS count,
+                SUM(type LIKE 'reservation_%') AS reservationCount
+         FROM notifications WHERE user_id = ? AND read_at IS NULL`,
+        [req.user.id]
+    );
+    let reservationCount = Number(rows[0].reservationCount || 0);
+    if (staffRoles.includes(req.user.role)) {
+        const [pending] = await db.execute(
+            "SELECT COUNT(*) AS count FROM reservations WHERE status = 'pending'",
+        );
+        reservationCount = Number(pending[0].count);
+    }
+    res.json({ unreadCount: Number(rows[0].count), reservationCount });
+});
+
+router.post("/notifications/read", ...authRequired, async (req, res) => {
+    await db.execute(
+        "UPDATE notifications SET read_at = NOW() WHERE user_id = ? AND read_at IS NULL",
+        [req.user.id]
+    );
+    res.json({ message: "Notifications marked as read." });
+});
+
+router.post("/notifications/reservations/read", ...authRequired, async (req, res) => {
+    await db.execute(
+        `UPDATE notifications SET read_at = NOW()
+         WHERE user_id = ? AND read_at IS NULL AND type LIKE 'reservation_%'`,
+        [req.user.id]
+    );
+    res.json({ message: "Reservation notifications marked as read." });
+});
+
 router.get("/equipment", ...authRequired, async (req, res) => {
     const query = parse(z.object({
         q: z.string().trim().max(100).optional(),
@@ -588,6 +622,22 @@ router.get("/equipment", ...authRequired, async (req, res) => {
     );
     const [count] = await db.execute(`SELECT COUNT(*) AS total FROM equipment e WHERE ${where}`, params);
     res.json({ equipment: rows, pagination: { page: query.page, limit: query.limit, total: count[0].total } });
+});
+
+router.get("/equipment/:id", ...authRequired, async (req, res) => {
+    const id = parse(z.coerce.number().int().positive(), req.params.id);
+    const [rows] = await db.execute(
+        `SELECT e.id, e.asset_code AS assetCode, e.name, e.description, e.serial_number AS serialNumber,
+                CASE WHEN e.image_data IS NULL THEN NULL
+                  ELSE CONCAT('/api/equipment/', e.id, '/image') END AS imageUrl,
+                e.quantity, e.location, e.status,
+                c.id AS categoryId, c.name AS category
+         FROM equipment e JOIN categories c ON c.id = e.category_id
+         WHERE e.id = ? AND e.archived_at IS NULL`,
+        [id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Equipment not found." });
+    res.json({ equipment: rows[0] });
 });
 
 const equipmentInput = z.object({

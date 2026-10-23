@@ -33,6 +33,7 @@ The administrator can invite user roles using `POST /users` (borrower invites in
 | Method | Path | Access | Description |
 |---|---|---|---|
 | GET | `/equipment?q=&category=&status=&page=&limit=` | Authenticated | Search/filter/paginate active items |
+| GET | `/equipment/:id` | Authenticated | Get details for one active equipment item |
 | POST | `/equipment` | Custodian, administrator | Create an item; returns generated QR value and image data URL |
 | PUT | `/equipment/:id` | Custodian, administrator | Update provided inventory fields |
 | DELETE | `/equipment/:id` | Administrator | Archives rather than physically deletes |
@@ -80,6 +81,9 @@ Create payload:
 | GET | `/reports/:type/csv` | Custodian, administrator | CSV export; `type` is `usage`, `damage`, `overdue`, or `inventory` |
 | GET | `/reports/:type/pdf` | Custodian, administrator | PDF export for the same report types |
 | GET | `/notifications` | Authenticated | Current user’s reminder history |
+| GET | `/notifications/unread-count` | Authenticated | Unread notification count and reservation badge count (unread reservation alerts for borrowers; pending requests for staff) |
+| POST | `/notifications/read` | Authenticated | Marks the current user’s unread notifications as read |
+| POST | `/notifications/reservations/read` | Authenticated | Marks the current user’s unread reservation notifications as read |
 | GET | `/health` | Public | API and MySQL health |
 
 Error responses use `{ "error": "..." }`; validation responses also include a `details` array. Common status codes: 400 invalid input, 401 missing/invalid login, 403 role/account restriction, 404 missing route/resource, 409 conflict/duplicate, 429 rate limit, and 500 unexpected server error.

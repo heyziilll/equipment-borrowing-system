@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Html5QrcodeScanner } from "html5-qrcode";
@@ -18,7 +18,20 @@ function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [connectionError, setConnectionError] = useState("");
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [reservationNotificationCount, setReservationNotificationCount] = useState(0);
+  const [notificationError, setNotificationError] = useState("");
   const [retry, setRetry] = useState(0);
+  const refreshUnreadNotifications = useCallback(async () => {
+    try {
+      const { data } = await api.get("/notifications/unread-count");
+      setUnreadNotificationCount(data.unreadCount);
+      setReservationNotificationCount(data.reservationCount);
+      setNotificationError("");
+    } catch (error) {
+      setNotificationError(error.response?.data?.error || "Unread notification status could not be refreshed.");
+    }
+  }, []);
   useEffect(() => {
     setReady(false);
     api.get("/auth/me").then(({ data }) => { setUser(data.user); setConnectionError(""); }).catch((error) => {
@@ -30,7 +43,20 @@ function AuthProvider({ children }) {
       }
     }).finally(() => setReady(true));
   }, [retry]);
-  const value = useMemo(() => ({ user, setUser, ready, connectionError, retryConnection: () => setRetry((value) => value + 1) }), [user, ready, connectionError]);
+  useEffect(() => {
+    if (!user || !ready || user.mustChangePassword) {
+      setUnreadNotificationCount(0);
+      return undefined;
+    }
+    refreshUnreadNotifications();
+    const interval = window.setInterval(refreshUnreadNotifications, 30000);
+    return () => window.clearInterval(interval);
+  }, [user, ready, refreshUnreadNotifications]);
+  const value = useMemo(() => ({
+    user, setUser, ready, connectionError, unreadNotificationCount, setUnreadNotificationCount,
+    reservationNotificationCount, setReservationNotificationCount, notificationError,
+    refreshUnreadNotifications, retryConnection: () => setRetry((value) => value + 1)
+  }), [user, ready, connectionError, unreadNotificationCount, reservationNotificationCount, notificationError, refreshUnreadNotifications]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
@@ -163,10 +189,10 @@ function TemporaryPasswordPage() {
   </div>;
 }
 
-function Field({ label, type = "text", value, onChange, required, minLength, placeholder, autoComplete }) {
+function Field({ label, type = "text", value, onChange, required, minLength, placeholder, autoComplete, step }) {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const isPassword = type === "password";
-  return <label className="block text-sm font-medium text-slate-700">{label}<span className="relative mt-1.5 block"><input className={`field ${isPassword ? "pr-12" : ""}`} type={isPassword && passwordVisible ? "text" : type} value={value} onChange={(event) => onChange(event.target.value)} required={required} minLength={minLength} placeholder={placeholder} autoComplete={autoComplete || (isPassword ? (label.toLowerCase().includes("new") ? "new-password" : "current-password") : undefined)} />{isPassword && <button type="button" className="absolute inset-y-0 right-3 my-auto grid h-8 w-8 place-items-center rounded text-slate-500 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" aria-label={passwordVisible ? "Hide password" : "Show password"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}</button>}</span></label>;
+  return <label className="block text-sm font-medium text-slate-700">{label}<span className="relative mt-1.5 block"><input className={`field ${isPassword ? "pr-12" : ""}`} type={isPassword && passwordVisible ? "text" : type} value={value} onChange={(event) => onChange(event.target.value)} required={required} minLength={minLength} placeholder={placeholder} autoComplete={autoComplete || (isPassword ? (label.toLowerCase().includes("new") ? "new-password" : "current-password") : undefined)} step={step} />{isPassword && <button type="button" className="absolute inset-y-0 right-3 my-auto grid h-8 w-8 place-items-center rounded text-slate-500 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" aria-label={passwordVisible ? "Hide password" : "Show password"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}</button>}</span></label>;
 }
 
 const navigation = [
@@ -181,7 +207,7 @@ const navigation = [
 ];
 
 function Layout({ children }) {
-  const { user, setUser } = useAuth();
+  const { user, setUser, unreadNotificationCount, reservationNotificationCount, notificationError } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [logoutError, setLogoutError] = useState("");
@@ -201,12 +227,14 @@ function Layout({ children }) {
       <div className="mt-9 px-3 text-[10px] font-semibold uppercase tracking-[.2em] text-slate-500">Workspace</div>
       <nav className="mt-2 flex gap-1 overflow-auto md:flex-col">{navigation.filter((item) => item.roles.includes(user.role)).map((item) => {
         const Icon = item.icon; const active = location.pathname === item.to;
-        return <Link key={item.to} to={item.to} className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${active ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-white/5"}`}><Icon size={17} />{item.title}</Link>;
+        const badgeCount = item.to === "/notifications" ? unreadNotificationCount : item.to === "/reservations" ? reservationNotificationCount : 0;
+        const hasBadge = badgeCount > 0;
+        return <Link key={item.to} to={item.to} aria-label={hasBadge ? `${item.title}, ${badgeCount} ${item.to === "/reservations" ? "pending or unread" : "unread"}` : item.title} className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${active ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-white/5"}`}><Icon size={17} />{item.title}{hasBadge && <span className="ml-auto rounded-full bg-red-500 px-2 py-0.5 text-[10px] font-bold leading-4 text-white">{badgeCount > 99 ? "99+" : badgeCount}</span>}</Link>;
       })}</nav>
       <div className="mt-8 hidden rounded-xl border border-white/10 p-4 text-xs leading-5 text-slate-400 md:block"><ShieldCheck size={17} className="mb-2 text-emerald-400" />Signed-in access is role restricted. Report account or equipment issues to a custodian.</div>
       <div className="mt-5 flex items-center justify-between border-t border-white/10 px-2 pt-4 md:mt-8"><div className="min-w-0"><div className="truncate text-sm font-medium">{user.email}</div><div className="mt-0.5 text-xs capitalize text-slate-400">{user.role.replace("_", " ")}</div></div><button onClick={logout} title="Sign out" className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white"><LogOut size={17} /></button></div>
     </aside>
-    <main className="main-panel flex-1 px-5 py-6 sm:px-8 lg:px-10"><div className="mx-auto max-w-7xl">{logoutError && <Notice message={logoutError} error />}{children}</div></main>
+    <main className="main-panel flex-1 px-5 py-6 sm:px-8 lg:px-10"><div className="mx-auto max-w-7xl">{logoutError && <Notice message={logoutError} error />}{notificationError && <Notice message={notificationError} error />}{children}</div></main>
   </div>;
 }
 
@@ -256,10 +284,18 @@ function EquipmentPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
   const [editing, setEditing] = useState(null);
+  const editSectionRef = useRef(null);
   const [qr, setQr] = useState(null);
+  const qrSectionRef = useRef(null);
   const [newItem, setNewItem] = useState({ assetCode: "", name: "", categoryId: "", quantity: "1", location: "", description: "", serialNumber: "" });
   const load = () => api.get("/equipment", { params: { q: query, category: category || undefined, status: status || undefined } }).then(({ data }) => setRows(data.equipment)).catch((e) => { setError(true); setMessage(e.response?.data?.error || "Equipment could not be loaded."); });
   useEffect(() => { load(); api.get("/categories").then(({ data }) => setCategories(data.categories)).catch(() => {}); }, []);
+  useEffect(() => {
+    if (editing) editSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [editing]);
+  useEffect(() => {
+    if (qr) qrSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [qr]);
   async function createItem(event) {
     event.preventDefault(); setError(false);
     try {
@@ -309,8 +345,8 @@ function EquipmentPage() {
     <section className="card p-4 sm:p-5"><div className="grid gap-3 md:grid-cols-[1fr_210px_210px_auto]"><div className="relative min-w-0"><input className="field min-w-0 pr-11" placeholder="Search equipment or asset code" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} /><button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label="Search equipment" title="Search equipment" onClick={load}><Search size={17} /></button></div><select className="field" value={category} onChange={(e) => { setCategory(e.target.value); }}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><select className="field" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option>{["Available", "Reserved", "Checked Out", "Under Maintenance", "Lost"].map((s) => <option key={s}>{s}</option>)}</select><button className="btn-primary" onClick={load}>Search</button></div>
       <div className="table-scroll mt-5"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>{["Equipment", "Asset code", "Category", "Location", "Quantity", "Status", "Action"].map((h) => <th className="px-4 py-3 font-semibold" key={h}>{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.map((item) => <tr key={item.id}><td className="px-4 py-4"><div className="flex items-center gap-3">{item.imageUrl && <img src={item.imageUrl} alt="" className="h-10 w-10 rounded-lg object-cover" />}<span><b className="block text-slate-800">{item.name}</b><span className="text-xs text-slate-500">{item.description}</span></span></div></td><td className="px-4 py-4 font-mono text-xs">{item.assetCode}</td><td className="px-4 py-4">{item.category}</td><td className="px-4 py-4">{item.location}</td><td className="px-4 py-4">{item.quantity}</td><td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs ${equipmentStatusClass(item.status)}`}>{item.status}</span></td><td className="px-4 py-4"><div className="flex items-center gap-3">{canBorrow(user.role) && item.status === "Available" && <Link to={`/reserve/${item.id}`} className="font-semibold text-blue-700">Reserve</Link>}{canManageInventory(user.role) && <><button className="font-semibold text-blue-700" onClick={() => { setEditing(item.id); setNewItem({ assetCode: item.assetCode, name: item.name, categoryId: String(item.categoryId), quantity: String(item.quantity), location: item.location, description: item.description || "", status: item.status, serialNumber: item.serialNumber || "" }); }}>Edit</button><label className="cursor-pointer font-semibold text-slate-600">Image<input className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage(item, e.target.files?.[0])} /></label><button className="font-semibold text-slate-600" onClick={() => showQr(item)}>QR</button>{user.role === "administrator" && <button className="font-semibold text-red-600" onClick={() => archiveItem(item)}>Archive</button>}</>}</div></td></tr>)}</tbody></table>{!rows.length && <div className="py-12 text-center text-sm text-slate-500"><Archive className="mx-auto mb-2 text-slate-300" />No matching equipment found.</div>}</div>
     </section>
-    {qr && <section className="card mt-5 flex flex-wrap items-center gap-5 p-5"><img src={qr.image} alt={`QR code for ${qr.name}`} className="h-32 w-32" /><div><h2 className="font-semibold">{qr.name} QR code</h2><p className="mt-1 font-mono text-xs text-slate-500">{rows.find((item) => item.id === qr.id)?.qrCode}</p><button className="mt-3 text-sm font-semibold text-blue-700" onClick={() => setQr(null)}>Close</button></div></section>}
-    {editing && <section className="card mt-5 p-5"><h2 className="font-semibold">Edit equipment</h2><form onSubmit={saveEdit} className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><Field label="Asset code" value={newItem.assetCode} onChange={(v) => setNewItem({ ...newItem, assetCode: v })} required /><Field label="Equipment name" value={newItem.name} onChange={(v) => setNewItem({ ...newItem, name: v })} required /><label className="block text-sm font-medium">Category<select className="field mt-1.5" required value={newItem.categoryId} onChange={(e) => setNewItem({ ...newItem, categoryId: e.target.value })}><option value="">Select category</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><Field label="Serial number" value={newItem.serialNumber} onChange={(v) => setNewItem({ ...newItem, serialNumber: v })} /><Field label="Quantity" type="number" value={newItem.quantity} onChange={(v) => setNewItem({ ...newItem, quantity: v })} required /><Field label="Storage location" value={newItem.location} onChange={(v) => setNewItem({ ...newItem, location: v })} required /><Field label="Description" value={newItem.description} onChange={(v) => setNewItem({ ...newItem, description: v })} /><button className="btn-primary">Save changes</button><button type="button" className="btn-secondary" onClick={() => setEditing(null)}>Cancel</button></form></section>}
+    {qr && <section ref={qrSectionRef} className="card mt-5 flex flex-wrap items-center gap-5 p-5"><img src={qr.image} alt={`QR code for ${qr.name}`} className="h-32 w-32" /><div><h2 className="font-semibold">{qr.name} QR code</h2><p className="mt-1 font-mono text-xs text-slate-500">{rows.find((item) => item.id === qr.id)?.qrCode}</p><button className="mt-3 text-sm font-semibold text-blue-700" onClick={() => setQr(null)}>Close</button></div></section>}
+    {editing && <section ref={editSectionRef} className="card mt-5 p-5"><h2 className="font-semibold">Edit equipment</h2><form onSubmit={saveEdit} className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><Field label="Asset code" value={newItem.assetCode} onChange={(v) => setNewItem({ ...newItem, assetCode: v })} required /><Field label="Equipment name" value={newItem.name} onChange={(v) => setNewItem({ ...newItem, name: v })} required /><label className="block text-sm font-medium">Category<select className="field mt-1.5" required value={newItem.categoryId} onChange={(e) => setNewItem({ ...newItem, categoryId: e.target.value })}><option value="">Select category</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><Field label="Serial number" value={newItem.serialNumber} onChange={(v) => setNewItem({ ...newItem, serialNumber: v })} /><Field label="Quantity" type="number" value={newItem.quantity} onChange={(v) => setNewItem({ ...newItem, quantity: v })} required /><Field label="Storage location" value={newItem.location} onChange={(v) => setNewItem({ ...newItem, location: v })} required /><Field label="Description" value={newItem.description} onChange={(v) => setNewItem({ ...newItem, description: v })} /><button className="btn-primary">Save changes</button><button type="button" className="btn-secondary" onClick={() => setEditing(null)}>Cancel</button></form></section>}
     {canManageInventory(user.role) && <section className="card mt-5 p-5"><h2 className="font-semibold">Add inventory item</h2><form className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" onSubmit={createItem}><Field label="Asset code" value={newItem.assetCode} onChange={(v) => setNewItem({ ...newItem, assetCode: v })} required /><Field label="Equipment name" value={newItem.name} onChange={(v) => setNewItem({ ...newItem, name: v })} required /><label className="block text-sm font-medium">Category<select className="field mt-1.5" required value={newItem.categoryId} onChange={(e) => setNewItem({ ...newItem, categoryId: e.target.value })}><option value="">Select category</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><Field label="Serial number" value={newItem.serialNumber} onChange={(v) => setNewItem({ ...newItem, serialNumber: v })} /><Field label="Quantity" type="number" value={newItem.quantity} onChange={(v) => setNewItem({ ...newItem, quantity: v })} required /><Field label="Storage location" value={newItem.location} onChange={(v) => setNewItem({ ...newItem, location: v })} required /><Field label="Description" value={newItem.description} onChange={(v) => setNewItem({ ...newItem, description: v })} /><button className="btn-primary sm:col-span-2 lg:col-span-3">Add equipment and generate QR</button></form></section>}
   </>;
 }
@@ -319,9 +355,18 @@ function ReservePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const id = Number(useLocation().pathname.split("/").pop());
+  const [equipment, setEquipment] = useState(null);
+  const [equipmentError, setEquipmentError] = useState("");
   const [form, setForm] = useState({ pickupAt: "", dueAt: "", purpose: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
+  useEffect(() => {
+    setEquipment(null);
+    setEquipmentError("");
+    api.get(`/equipment/${id}`)
+      .then(({ data }) => setEquipment(data.equipment))
+      .catch((e) => setEquipmentError(e.response?.data?.error || "Equipment details could not be loaded."));
+  }, [id]);
   async function submit(e) {
     e.preventDefault();
     try {
@@ -330,16 +375,23 @@ function ReservePage() {
       setTimeout(() => navigate("/reservations"), 900);
     } catch (e2) { setError(true); setMessage(e2.response?.data?.error || "Reservation failed."); }
   }
-  return <><PageHeading eyebrow="Equipment request" title="Reserve equipment" /><div className="card max-w-2xl p-6"><Notice message={message} error={error} />{user.accountHold && <Notice error message="Resolve your account hold before making a reservation." />}<form onSubmit={submit} className="space-y-4"><Field label="Pickup date and time" type="datetime-local" value={form.pickupAt} onChange={(v) => setForm({ ...form, pickupAt: v })} required /><Field label="Expected return date and time" type="datetime-local" value={form.dueAt} onChange={(v) => setForm({ ...form, dueAt: v })} required /><label className="block text-sm font-medium">Academic purpose<textarea className="field mt-1.5" rows="4" minLength="5" maxLength="500" required value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} placeholder="Describe the class, lab, or academic activity" /></label><button className="btn-primary" disabled={user.accountHold}>Submit reservation</button></form></div></>;
+  return <><PageHeading eyebrow="Equipment request" title="Reserve equipment" /><div className="card max-w-2xl p-6"><Notice message={message} error={error} />{user.accountHold && <Notice error message="Resolve your account hold before making a reservation." />}{equipmentError ? <Notice message={equipmentError} error /> : equipment ? <section className="mb-5 flex flex-wrap items-center gap-4 rounded-xl border border-blue-100 bg-blue-50/60 p-4" aria-label="Equipment being reserved">{equipment.imageUrl && <img src={equipment.imageUrl} alt={equipment.name} className="h-20 w-20 rounded-lg object-cover" />}<div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-blue-700">You are reserving</p><h2 className="mt-1 font-semibold text-slate-900">{equipment.name}</h2><p className="mt-1 text-sm text-slate-600">{equipment.category} · {equipment.assetCode}</p><p className="mt-1 text-sm text-slate-500">{equipment.location} · Quantity: {equipment.quantity}</p></div></section> : <p className="mb-5 text-sm text-slate-500" role="status">Loading equipment details…</p>}<form onSubmit={submit} className="space-y-4"><Field label="Pickup date and time" type="datetime-local" step={60} value={form.pickupAt} onChange={(v) => setForm({ ...form, pickupAt: v })} required /><Field label="Expected return date and time" type="datetime-local" step={60} value={form.dueAt} onChange={(v) => setForm({ ...form, dueAt: v })} required /><label className="block text-sm font-medium">Academic purpose<textarea className="field mt-1.5" rows="4" minLength="5" maxLength="500" required value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} placeholder="Describe the class, lab, or academic activity" /></label><button className="btn-primary" disabled={user.accountHold || !equipment}>Submit reservation</button></form></div></>;
 }
 
 function ReservationsPage() {
-  const { user } = useAuth();
+  const { user, refreshUnreadNotifications } = useAuth();
   const [rows, setRows] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
   const load = () => api.get("/reservations").then(({ data }) => setRows(data.reservations)).catch((e) => setMessage(e.response?.data?.error || "Reservations could not be loaded."));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    if (borrowerRoles.includes(user.role)) {
+      api.post("/notifications/reservations/read")
+        .then(refreshUnreadNotifications)
+        .catch((e) => setMessage(e.response?.data?.error || "Reservation notifications could not be marked as read."));
+    }
+  }, [refreshUnreadNotifications, user.role]);
   async function cancel(id) {
     try {
       await api.post(`/reservations/${id}/cancel`);
@@ -386,13 +438,23 @@ function ReservationsPage() {
 }
 
 function NotificationsPage() {
+  const { setUnreadNotificationCount, refreshUnreadNotifications } = useAuth();
   const [notifications, setNotifications] = useState([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    api.get("/notifications")
-      .then(({ data }) => setNotifications(data.notifications))
-      .catch((e) => setError(e.response?.data?.error || "Notifications could not be loaded."));
-  }, []);
+    async function loadNotifications() {
+      try {
+        await api.post("/notifications/read");
+        const { data } = await api.get("/notifications");
+        setNotifications(data.notifications);
+        setUnreadNotificationCount(0);
+        refreshUnreadNotifications();
+      } catch (e) {
+        setError(e.response?.data?.error || "Notifications could not be loaded.");
+      }
+    }
+    loadNotifications();
+  }, [refreshUnreadNotifications, setUnreadNotificationCount]);
   return <>
     <PageHeading eyebrow="Account updates" title="Notifications" />
     <Notice message={error} error={!!error} />
