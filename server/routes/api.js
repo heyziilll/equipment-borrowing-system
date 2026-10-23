@@ -217,6 +217,26 @@ router.post("/auth/change-temporary-password", ...passwordUpdateAllowed, async (
     res.json({ message: "Password updated. You can now use your account." });
 });
 
+router.post("/auth/change-password", ...authRequired, async (req, res) => {
+    const input = parse(z.object({
+        currentPassword: z.string().min(1).max(128),
+        newPassword: passwordSchema
+    }).strict(), req.body);
+    const [rows] = await db.execute("SELECT password_hash FROM users WHERE id = ?", [req.user.id]);
+    if (!await bcrypt.compare(input.currentPassword, rows[0].password_hash)) {
+        return res.status(400).json({ error: "The current password is incorrect." });
+    }
+    if (await bcrypt.compare(input.newPassword, rows[0].password_hash)) {
+        return res.status(400).json({ error: "Choose a new password different from your current password." });
+    }
+    await db.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        [await bcrypt.hash(input.newPassword, 12), req.user.id]
+    );
+    await audit(req, "auth.password_changed", "user", req.user.id);
+    res.json({ message: "Password changed successfully." });
+});
+
 router.post("/auth/logout", (req, res) => {
     res.clearCookie("ebs_token", {
         httpOnly: true,

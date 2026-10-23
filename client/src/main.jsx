@@ -419,9 +419,13 @@ function ProfilePage() {
     studentId: user.studentId || "",
     program: user.program || ""
   });
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
+  const [passwordMessage, setPasswordMessage] = useState("");
   const [error, setError] = useState(false);
+  const [passwordError, setPasswordError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const isBorrower = borrowerRoles.includes(user.role);
 
   async function saveProfile(event) {
@@ -449,6 +453,31 @@ function ProfilePage() {
     }
   }
 
+  async function changePassword(event) {
+    event.preventDefault();
+    setPasswordMessage("");
+    setPasswordError(false);
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError(true);
+      setPasswordMessage("The new passwords do not match.");
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      const { data } = await api.post("/auth/change-password", {
+        currentPassword: passwordForm.currentPassword,
+        newPassword: passwordForm.newPassword
+      });
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      setPasswordMessage(data.message);
+    } catch (e) {
+      setPasswordError(true);
+      setPasswordMessage(e.response?.data?.error || "Password could not be changed.");
+    } finally {
+      setPasswordBusy(false);
+    }
+  }
+
   return <>
     <PageHeading eyebrow="Account settings" title="My profile" />
     <section className="card max-w-2xl p-6">
@@ -465,6 +494,19 @@ function ProfilePage() {
           <Field label="Program of study" value={form.program} onChange={(value) => setForm({ ...form, program: value })} required={user.role === "student"} />
         </>}
         <button className="btn-primary" disabled={busy}>{busy ? "Saving…" : "Save profile"}</button>
+      </form>
+    </section>
+    <section className="card mt-5 max-w-2xl p-6">
+      <div className="mb-5">
+        <h2 className="font-semibold">Change password</h2>
+        <p className="mt-1 text-sm text-slate-500">You can update your password whenever you like. Use at least 12 characters.</p>
+      </div>
+      <Notice message={passwordMessage} error={passwordError} />
+      <form className="space-y-4" onSubmit={changePassword}>
+        <Field label="Current password" type="password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(value) => setPasswordForm({ ...passwordForm, currentPassword: value })} required />
+        <Field label="New password" type="password" minLength={12} autoComplete="new-password" value={passwordForm.newPassword} onChange={(value) => setPasswordForm({ ...passwordForm, newPassword: value })} required />
+        <Field label="Confirm new password" type="password" minLength={12} autoComplete="new-password" value={passwordForm.confirmPassword} onChange={(value) => setPasswordForm({ ...passwordForm, confirmPassword: value })} required />
+        <button className="btn-primary" disabled={passwordBusy}>{passwordBusy ? "Updating…" : "Change password"}</button>
       </form>
     </section>
   </>;
