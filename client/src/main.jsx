@@ -586,38 +586,83 @@ function Scanner({ onScan }) {
 function DeskPage() {
   const [qrCode, setQrCode] = useState("");
   const [reservationCode, setReservationCode] = useState("");
+  const [activeLoans, setActiveLoans] = useState([]);
+  const [loanSearch, setLoanSearch] = useState("");
+  const [selectedLoan, setSelectedLoan] = useState(null);
   const [condition, setCondition] = useState("Good");
   const [notes, setNotes] = useState("");
   const [photo, setPhoto] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
   const [receiptId, setReceiptId] = useState(null);
+  const [scannerCycle, setScannerCycle] = useState(0);
+  const [loanError, setLoanError] = useState("");
+  const returnSectionRef = useRef(null);
+  const filteredLoans = activeLoans.filter((loan) => {
+    const query = loanSearch.trim().toLowerCase();
+    return !query || [loan.equipmentName, loan.assetCode, loan.borrowerName, loan.borrowerEmail]
+      .some((value) => value?.toLowerCase().includes(query));
+  });
   const handleScan = useCallback((value) => setQrCode(value), []);
+  const loadActiveLoans = useCallback(async () => {
+    try {
+      const { data } = await api.get("/active-loans");
+      setActiveLoans(data.loans);
+      setLoanError("");
+    } catch (e) {
+      setLoanError(e.response?.data?.error || "Active loans could not be loaded.");
+    }
+  }, []);
+  useEffect(() => { loadActiveLoans(); }, [loadActiveLoans]);
   async function checkout() {
     try {
       const { data } = await api.post("/checkout", { qrCode, reservationCode });
       setMessage(`Checkout recorded for ${data.borrowerEmail}; due ${new Date(data.dueAt).toLocaleString()}.${data.notificationWarning ? ` ${data.notificationWarning}` : ""}`);
-      setReceiptId(data.transactionId); setError(false);
+      setReceiptId(data.transactionId);
+      setQrCode("");
+      setReservationCode("");
+      setError(false);
+      setScannerCycle((cycle) => cycle + 1);
+      loadActiveLoans();
     } catch (e) {
       const details = e.response?.data?.details;
       const detailMessage = Array.isArray(details)
         ? details.map((detail) => `${detail.field}: ${detail.message}`).join(" ")
         : "";
       setError(true);
+      setScannerCycle((cycle) => cycle + 1);
       setMessage(detailMessage
         ? `${e.response?.data?.error || "Checkout failed."} ${detailMessage}`
         : e.response?.data?.error || "Checkout failed.");
     }
   }
   async function returnItem() {
-    if (!window.confirm("Confirm the borrower has physically returned this equipment and you have inspected its condition?")) return;
+    if (!selectedLoan) return;
+    if (!window.confirm(`Confirm ${selectedLoan.borrowerName || selectedLoan.borrowerEmail} physically returned ${selectedLoan.equipmentName} and you inspected its condition?`)) return;
     try {
-      const { data } = await api.post("/return", { qrCode, condition, notes, photo });
+      const { data } = await api.post("/return", { transactionId: String(selectedLoan.id), qrCode, condition, notes, photo });
       setMessage(`Return received and recorded for the borrower and staff. ${data.accountHold ? "Account hold placed for staff review." : "Item cleared."}${data.notificationWarning ? ` ${data.notificationWarning}` : ""}`);
-      setError(false); setNotes(""); setPhoto("");
+      setError(false);
+      setNotes("");
+      setPhoto("");
+      setQrCode("");
+      setCondition("Good");
+      setSelectedLoan(null);
+      setScannerCycle((cycle) => cycle + 1);
+      loadActiveLoans();
     } catch (e) {
-      setError(true); setMessage(e.response?.data?.error || "Return failed.");
+      setError(true);
+      setScannerCycle((cycle) => cycle + 1);
+      setMessage(e.response?.data?.error || "Return failed.");
     }
+  }
+  function selectLoanForReturn(loan) {
+    setSelectedLoan(loan);
+    setQrCode("");
+    setCondition("Good");
+    setNotes("");
+    setPhoto("");
+    returnSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
   async function selectPhoto(file) { if (!file) return; if (file.size > 5 * 1024 * 1024) { setError(true); setMessage("Photo must be no larger than 5 MB."); return; } const reader = new FileReader(); reader.onload = () => setPhoto(String(reader.result)); reader.readAsDataURL(file); }
   return <>
@@ -628,7 +673,7 @@ function DeskPage() {
       <section className="card p-5">
         <div className="flex items-center gap-2 font-semibold"><QrCode size={18} className="text-blue-700" /> Scan equipment QR code</div>
         <p className="mt-2 text-sm text-slate-500">Allow camera access or enter the QR value manually.</p>
-        <div className="mt-4"><Scanner onScan={handleScan} /></div>
+        <div className="mt-4"><Scanner key={scannerCycle} onScan={handleScan} /></div>
         <Field label="Equipment QR value" value={qrCode} onChange={setQrCode} required />
       </section>
       <div className="space-y-5">
@@ -641,15 +686,43 @@ function DeskPage() {
           </div>
         </section>
         <section className="card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold">Items currently checked out</h2>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{activeLoans.length} active {activeLoans.length === 1 ? "loan" : "loans"}</span>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">Search by borrower, equipment, or asset code, then inspect each return independently.</p>
+          <Notice message={loanError} error={!!loanError} />
+          <input className="field mt-3" type="search" value={loanSearch} onChange={(event) => setLoanSearch(event.target.value)} placeholder="Search active loans" aria-label="Search checked-out items by borrower, equipment, or asset code" />
+          <div className="mt-3 max-h-80 space-y-3 overflow-y-auto">
+            {filteredLoans.map((loan) => {
+              const isOverdue = new Date(loan.dueAt).getTime() <= Date.now() - 15 * 60 * 1000;
+              return <article key={loan.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3">
+                <div className="min-w-0">
+                  <h3 className="font-medium text-slate-900">{loan.equipmentName} <span className="font-mono text-xs text-slate-500">{loan.assetCode}</span></h3>
+                  <p className="mt-1 text-sm text-slate-600">{loan.borrowerName || loan.borrowerEmail}</p>
+                  {loan.borrowerName && <p className="text-xs text-slate-500">{loan.borrowerEmail}</p>}
+                  <p className={`mt-1 text-xs ${isOverdue ? "font-semibold text-red-700" : "text-slate-500"}`}>{isOverdue ? "Overdue · " : ""}Due {new Date(loan.dueAt).toLocaleString()}</p>
+                </div>
+                <button type="button" className="btn-secondary text-sm" onClick={() => selectLoanForReturn(loan)}>Inspect return</button>
+              </article>;
+            })}
+            {!activeLoans.length && !loanError && <p className="py-4 text-sm text-slate-500">No equipment is currently checked out.</p>}
+            {activeLoans.length > 0 && !filteredLoans.length && <p className="py-4 text-sm text-slate-500">No active loans match that search.</p>}
+          </div>
+        </section>
+        <section ref={returnSectionRef} className="card p-5">
           <h2 className="font-semibold">Inspect and confirm return</h2>
-          <p className="mt-1 text-sm text-slate-500">Only use this after the borrower physically returns the item. Inspect its condition first; both accounts will be notified.</p>
+          <p className="mt-1 text-sm text-slate-500">Select the active loan above, scan the returned item’s QR code, and inspect its condition. Other borrowers’ active loans are unaffected.</p>
+          {selectedLoan && <div className="mt-3 rounded-lg bg-blue-50 p-3 text-sm"><span className="font-semibold">Selected return:</span> {selectedLoan.equipmentName} ({selectedLoan.assetCode}) from {selectedLoan.borrowerName || selectedLoan.borrowerEmail}</div>}
           <div className="mt-4 space-y-3">
+            <Field label="Returned equipment QR value or asset code" value={qrCode} onChange={setQrCode} required />
+            <p className="text-xs text-slate-500">Scan the equipment QR code, or enter its printed asset code (for example, DEMO-AV-001).</p>
             <label className="block text-sm font-medium">Condition<select className="field mt-1.5" value={condition} onChange={(e) => setCondition(e.target.value)}><option>Good</option><option>Damaged</option><option>Missing Parts</option></select></label>
             {condition !== "Good" && <>
               <label className="block text-sm font-medium">Incident notes<textarea className="field mt-1.5" rows="3" required value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
               <label className="block text-sm font-medium">Incident photo (required)<input className="field mt-1.5" type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => selectPhoto(e.target.files?.[0])} /></label>
             </>}
-            <button className="btn-secondary inline-flex items-center gap-2" onClick={returnItem}><Check size={16} /> Confirm item returned</button>
+            <button type="button" className="btn-secondary inline-flex items-center gap-2" onClick={returnItem} disabled={!selectedLoan || !qrCode}><Check size={16} /> Confirm item returned</button>
           </div>
         </section>
       </div>

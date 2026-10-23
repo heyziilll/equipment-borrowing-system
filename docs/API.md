@@ -66,9 +66,10 @@ Create payload:
 | POST | `/reservations/:id/approve` | Custodian, administrator | Approve a pending request when equipment capacity is available |
 | POST | `/reservations/:id/reject` | Custodian, administrator | Decline a pending request using `{ reason }`; the reason is shared with the borrower |
 | POST | `/reservations/:id/cancel` | Owner or staff | Cancel pending/approved reservation |
+| GET | `/active-loans` | Custodian, administrator | List each active/overdue loan separately so staff can select the correct borrower and equipment for return |
 | POST | `/checkout` | Custodian, administrator | `{ qrCode, reservationCode }`; only an approved reservation can be checked out. Staff call this after the borrower physically collects the item; records the handover and notifies the borrower and processing staff member. Returns transaction ID, borrower, and due date |
 | GET | `/receipts/:id/pdf` | Transaction borrower or staff | Download checkout receipt |
-| POST | `/return` | Custodian, administrator | `{ qrCode, condition, notes?, photo? }`; staff call this only after physically receiving and inspecting an active loan. Records the return and notifies the borrower and processing staff member; non-good condition requires notes and a base64 data URL image (max 5 MiB) |
+| POST | `/return` | Custodian, administrator | `{ transactionId, qrCode, condition, notes?, photo? }`; staff select a specific active loan and confirm its equipment QR value or printed asset code after physically receiving and inspecting it. Records that loan's return and notifies the borrower and processing staff member; non-good condition requires notes and a base64 data URL image (max 5 MiB) |
 | GET | `/damage-reports/:id/photo` | Custodian, administrator | Download protected incident photo |
 | GET | `/damage-reports?status=open` | Custodian, administrator | Review incident reports, optionally filtered by status |
 | PUT | `/damage-reports/:id/resolve` | Administrator | Resolve report and clear holds when no other open issues/overdues remain |

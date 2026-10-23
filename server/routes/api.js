@@ -1050,6 +1050,20 @@ router.post("/reservations/:id/cancel", ...authRequired, async (req, res) => {
     res.json({ message: "Reservation cancelled." });
 });
 
+router.get("/active-loans", ...staffOnly, async (req, res) => {
+    const [rows] = await db.execute(
+        `SELECT bt.id, bt.borrower_id AS borrowerId, bt.due_at AS dueAt, bt.status,
+                u.full_name AS borrowerName, u.email AS borrowerEmail,
+                e.name AS equipmentName, e.asset_code AS assetCode, e.qr_code AS qrCode
+         FROM borrow_transactions bt
+         JOIN users u ON u.id = bt.borrower_id
+         JOIN equipment e ON e.id = bt.equipment_id
+         WHERE bt.status IN ('active', 'overdue')
+         ORDER BY bt.due_at, e.name`
+    );
+    res.json({ loans: rows });
+});
+
 router.post("/checkout", ...staffOnly, async (req, res) => {
     const input = parse(z.object({
         qrCode: z.string().trim().min(3).max(200),
@@ -1174,6 +1188,7 @@ router.get("/receipts/:id/pdf", ...authRequired, async (req, res) => {
 
 router.post("/return", ...staffOnly, async (req, res) => {
     const input = parse(z.object({
+        transactionId: z.string().regex(/^\d+$/),
         qrCode: z.string().trim().min(3).max(200),
         condition: z.enum(["Good", "Damaged", "Missing Parts"]),
         notes: z.string().trim().max(4000).optional(),
@@ -1199,12 +1214,13 @@ router.post("/return", ...staffOnly, async (req, res) => {
             `SELECT bt.id, bt.equipment_id, bt.borrower_id, e.id AS item_id, u.email
              FROM borrow_transactions bt JOIN equipment e ON e.id = bt.equipment_id
              JOIN users u ON u.id = bt.borrower_id
-             WHERE e.qr_code = ? AND bt.status IN ('active','overdue') FOR UPDATE`,
-            [input.qrCode]
+             WHERE bt.id = ? AND (e.qr_code = ? OR e.asset_code = ?)
+               AND bt.status IN ('active','overdue') FOR UPDATE`,
+            [input.transactionId, input.qrCode, input.qrCode]
         );
-        if (rows.length !== 1) {
+        if (!rows.length) {
             await connection.rollback();
-            return res.status(409).json({ error: "No single active loan matches this QR code." });
+            return res.status(409).json({ error: "The selected loan is no longer active, or the QR/asset code does not match its equipment." });
         }
         const loan = rows[0];
         const [returned] = await connection.execute(
